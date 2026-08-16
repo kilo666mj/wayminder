@@ -42,7 +42,7 @@ already occupied.
 
 ## Connect an MCP client
 
-Use `http://deployment-host:8080/mcp` as the Streamable HTTP endpoint and send:
+Use `http://wayminder.example.com:8080/mcp` as the Streamable HTTP endpoint and send:
 
 ```text
 Authorization: Bearer <WAYMINDER_AUTH_TOKEN>
