@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kilo666mj/wayminder/internal/memory"
 	"github.com/pgvector/pgvector-go"
@@ -113,7 +114,12 @@ func (p *Postgres) FindDuplicate(ctx context.Context, embedding []float32, scope
 }
 
 func (p *Postgres) Insert(ctx context.Context, item memory.Memory, embedding []float32) (memory.Memory, error) {
-	row := p.pool.QueryRow(ctx, `
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.Memory{}, err
+	}
+	defer tx.Rollback(ctx)
+	row := tx.QueryRow(ctx, `
 		INSERT INTO memories (
 			id, content, summary, kind, scope, tags, embedding, embedding_model,
 			author_agent, source, supersedes_id, created_at, updated_at
@@ -122,7 +128,17 @@ func (p *Postgres) Insert(ctx context.Context, item memory.Memory, embedding []f
 		item.ID, item.Content, item.Summary, item.Kind, item.Scope, item.Tags,
 		pgvector.NewVector(embedding), item.EmbeddingModel, item.AuthorAgent, item.Source,
 		item.SupersedesID, item.CreatedAt, item.UpdatedAt)
-	return scanMemory(row)
+	stored, err := scanMemory(row)
+	if err != nil {
+		return memory.Memory{}, err
+	}
+	if err := insertAudit(ctx, tx, "remember", stored.ID, stored.AuthorAgent, stored.Source); err != nil {
+		return memory.Memory{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return memory.Memory{}, err
+	}
+	return stored, nil
 }
 
 func (p *Postgres) Replace(ctx context.Context, oldID string, replacement memory.Memory, embedding []float32) (memory.Memory, error) {
@@ -155,6 +171,9 @@ func (p *Postgres) Replace(ctx context.Context, oldID string, replacement memory
 		oldID, replacement.CreatedAt, replacement.UpdatedAt)
 	stored, err := scanMemory(row)
 	if err != nil {
+		return memory.Memory{}, err
+	}
+	if err := insertAudit(ctx, tx, "supersede", stored.ID, stored.AuthorAgent, stored.Source); err != nil {
 		return memory.Memory{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -244,8 +263,13 @@ func (p *Postgres) List(ctx context.Context, scopes []string, kind string, limit
 	return result, rows.Err()
 }
 
-func (p *Postgres) Forget(ctx context.Context, id string) (memory.Memory, error) {
-	row := p.pool.QueryRow(ctx, `
+func (p *Postgres) Forget(ctx context.Context, id string, principal memory.Principal) (memory.Memory, error) {
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.Memory{}, err
+	}
+	defer tx.Rollback(ctx)
+	row := tx.QueryRow(ctx, `
 		UPDATE memories SET deleted_at = now(), updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
 		RETURNING `+memoryColumns, id)
@@ -253,7 +277,27 @@ func (p *Postgres) Forget(ctx context.Context, id string) (memory.Memory, error)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return memory.Memory{}, fmt.Errorf("live memory %s not found", id)
 	}
-	return item, err
+	if err != nil {
+		return memory.Memory{}, err
+	}
+	if err := insertAudit(ctx, tx, "forget", item.ID, principal.Agent, principal.Source); err != nil {
+		return memory.Memory{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return memory.Memory{}, err
+	}
+	return item, nil
+}
+
+type auditExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func insertAudit(ctx context.Context, db auditExecer, action, memoryID, actor, source string) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO memory_audit_events (action, memory_id, actor, source)
+		VALUES ($1, $2, $3, $4)`, action, memoryID, actor, source)
+	return err
 }
 
 func (p *Postgres) Stats(ctx context.Context) (memory.Stats, error) {

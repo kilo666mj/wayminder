@@ -41,7 +41,7 @@ func (*fakeStore) Recall(context.Context, []float32, string, []string, string, i
 func (*fakeStore) List(context.Context, []string, string, int, string) ([]Memory, error) {
 	return nil, nil
 }
-func (*fakeStore) Forget(context.Context, string) (Memory, error) {
+func (*fakeStore) Forget(context.Context, string, Principal) (Memory, error) {
 	return Memory{}, errors.New("not implemented")
 }
 func (*fakeStore) Stats(context.Context) (Stats, error) { return Stats{}, nil }
@@ -72,6 +72,22 @@ func TestRememberRejectsSecrets(t *testing.T) {
 	_, err := service.Remember(context.Background(), RememberRequest{Content: "api_key=1234567890abcdef", Scope: "global"}, Principal{})
 	if err == nil {
 		t.Fatal("Remember() accepted a likely secret")
+	}
+}
+
+func TestRememberRejectsSecretsInEveryStoredUserField(t *testing.T) {
+	service := NewService(&fakeStore{}, fakeEmbedder{}, .92, 1024)
+	tests := []RememberRequest{
+		{Content: "safe", Summary: "password=1234567890abcdef"},
+		{Content: "safe", Tags: []string{"api_key=1234567890abcdef"}},
+	}
+	for _, request := range tests {
+		if _, err := service.Remember(context.Background(), request, Principal{}); err == nil {
+			t.Fatalf("Remember() accepted likely secret in %#v", request)
+		}
+	}
+	if _, err := service.Remember(context.Background(), RememberRequest{Content: "safe"}, Principal{Source: "access_token=1234567890abcdef"}); err == nil {
+		t.Fatal("Remember() accepted likely secret in provenance")
 	}
 }
 

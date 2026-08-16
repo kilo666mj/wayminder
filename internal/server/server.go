@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -17,6 +19,8 @@ import (
 )
 
 const version = "0.1.0"
+
+type principalContextKey struct{}
 
 type rememberInput struct {
 	Content string   `json:"content" jsonschema:"Durable knowledge to store"`
@@ -82,7 +86,7 @@ func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger)
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input rememberInput) (*mcp.CallToolResult, memory.RememberResult, error) {
 		result, err := service.Remember(ctx, memory.RememberRequest{
 			Content: input.Content, Summary: input.Summary, Kind: input.Kind, Scope: input.Scope, Tags: input.Tags,
-		}, principal(request))
+		}, principal(ctx, request))
 		return nil, result, err
 	})
 
@@ -108,15 +112,15 @@ func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger)
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input supersedeInput) (*mcp.CallToolResult, memoryOutput, error) {
 		item, err := service.Supersede(ctx, input.ID, memory.RememberRequest{
 			Content: input.Content, Summary: input.Summary, Kind: input.Kind, Scope: input.Scope, Tags: input.Tags,
-		}, principal(request))
+		}, principal(ctx, request))
 		return nil, memoryOutput{Memory: item}, err
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "forget",
 		Description: "Soft-delete a memory that should no longer appear in normal recall.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input idInput) (*mcp.CallToolResult, memoryOutput, error) {
-		item, err := service.Forget(ctx, input.ID)
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input idInput) (*mcp.CallToolResult, memoryOutput, error) {
+		item, err := service.Forget(ctx, input.ID, principal(ctx, request))
 		return nil, memoryOutput{Memory: item}, err
 	})
 
@@ -138,7 +142,8 @@ func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger)
 			Stateless: true, JSONResponse: true, MaxRequestBodyBytes: int64(cfg.MaxMemoryBytes + 64*1024), Logger: logger,
 		},
 	)
-	protectedMCP := authMiddleware(cfg.AuthToken, cfg.AllowInsecure, mcpHandler)
+	protectedMCP := authMiddleware(cfg.AuthToken, cfg.AuthClients, cfg.AllowInsecure,
+		newClientRateLimiter(cfg.RateLimitPerMinute, cfg.RateLimitBurst), mcpHandler)
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", protectedMCP)
@@ -146,16 +151,23 @@ func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "wayminder", "version": version})
 	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /readyz", readinessHandler(logger, func(ctx context.Context) error {
+		return service.Ready(ctx)
+	}))
+	return loggingMiddleware(logger, hostMiddleware(cfg.AllowedHosts, cfg.AllowInsecure, mux))
+}
+
+func readinessHandler(logger *slog.Logger, ready func(context.Context) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		if err := service.Ready(ctx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "error": err.Error()})
+		if err := ready(ctx); err != nil {
+			logger.Error("readiness check failed")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
-	return loggingMiddleware(logger, hostMiddleware(cfg.AllowedHosts, cfg.AllowInsecure, mux))
 }
 
 func buildInstructions(ctx context.Context, service *memory.Service) string {
@@ -169,11 +181,13 @@ func buildInstructions(ctx context.Context, service *memory.Service) string {
 	)
 }
 
-func principal(request *mcp.CallToolRequest) memory.Principal {
-	var result memory.Principal
+func principal(ctx context.Context, request *mcp.CallToolRequest) memory.Principal {
+	result, _ := ctx.Value(principalContextKey{}).(memory.Principal)
 	if request.Extra != nil {
-		result.Agent = strings.TrimSpace(request.Extra.Header.Get("X-Wayminder-Agent"))
 		result.Source = strings.TrimSpace(request.Extra.Header.Get("X-Wayminder-Source"))
+	}
+	if result.Agent == "" && request.Extra != nil {
+		result.Agent = strings.TrimSpace(request.Extra.Header.Get("X-Wayminder-Agent"))
 	}
 	if result.Agent == "" {
 		if client := request.ClientInfo(); client != nil {
@@ -183,21 +197,54 @@ func principal(request *mcp.CallToolRequest) memory.Principal {
 	return result
 }
 
-func authMiddleware(token string, allowInsecure bool, next http.Handler) http.Handler {
+func authMiddleware(legacyToken string, clients []config.AuthClient, allowInsecure bool, limiter *clientRateLimiter, next http.Handler) http.Handler {
+	type credential struct {
+		id   string
+		hash [sha256.Size]byte
+	}
+	credentials := make([]credential, 0, len(clients)+1)
+	for _, client := range clients {
+		var hash [sha256.Size]byte
+		decoded, _ := hex.DecodeString(client.TokenSHA256)
+		copy(hash[:], decoded)
+		credentials = append(credentials, credential{id: client.ID, hash: hash})
+	}
+	if legacyToken != "" {
+		credentials = append(credentials, credential{id: "legacy", hash: sha256.Sum256([]byte(legacyToken))})
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if allowInsecure && token == "" {
+		if allowInsecure && len(credentials) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
 		const prefix = "Bearer "
 		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, prefix) ||
-			subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(header, prefix))), []byte(token)) != 1 {
+		if len(r.Header.Values("Authorization")) != 1 || !strings.HasPrefix(header, prefix) ||
+			strings.TrimSpace(strings.TrimPrefix(header, prefix)) == "" ||
+			strings.ContainsAny(strings.TrimPrefix(header, prefix), " \t\r\n") {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="wayminder"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or missing bearer token"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		presented := sha256.Sum256([]byte(strings.TrimSpace(strings.TrimPrefix(header, prefix))))
+		clientID := ""
+		for _, candidate := range credentials {
+			if subtle.ConstantTimeCompare(presented[:], candidate.hash[:]) == 1 {
+				clientID = candidate.id
+			}
+		}
+		if clientID == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wayminder"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or missing bearer token"})
+			return
+		}
+		if !limiter.Allow(clientID, time.Now()) {
+			w.Header().Set("Retry-After", "60")
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
+		}
+		ctx := context.WithValue(r.Context(), principalContextKey{}, memory.Principal{Agent: clientID})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

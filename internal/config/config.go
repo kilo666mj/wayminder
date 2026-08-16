@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ type Config struct {
 	ListenAddress      string
 	DatabaseURL        string
 	AuthToken          string
+	AuthClients        []AuthClient
 	AllowInsecure      bool
 	AllowedHosts       []string
 	OllamaURL          string
@@ -20,7 +23,19 @@ type Config struct {
 	DedupThreshold     float64
 	RequestTimeout     time.Duration
 	MaxMemoryBytes     int
+	RateLimitPerMinute int
+	RateLimitBurst     int
 }
+
+type AuthClient struct {
+	ID          string `json:"id"`
+	TokenSHA256 string `json:"token_sha256"`
+}
+
+var (
+	validClientID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+	validSHA256   = regexp.MustCompile(`^[a-f0-9]{64}$`)
+)
 
 func Load() (Config, error) {
 	cfg := Config{
@@ -35,9 +50,19 @@ func Load() (Config, error) {
 		DedupThreshold:     envFloat("WAYMINDER_DEDUP_THRESHOLD", 0.92),
 		RequestTimeout:     envDuration("WAYMINDER_REQUEST_TIMEOUT", 20*time.Second),
 		MaxMemoryBytes:     envInt("WAYMINDER_MAX_MEMORY_BYTES", 16*1024),
+		RateLimitPerMinute: envInt("WAYMINDER_RATE_LIMIT_PER_MINUTE", 120),
+		RateLimitBurst:     envInt("WAYMINDER_RATE_LIMIT_BURST", 30),
 	}
-	if cfg.AuthToken == "" && !cfg.AllowInsecure {
-		return Config{}, fmt.Errorf("WAYMINDER_AUTH_TOKEN is required unless WAYMINDER_ALLOW_INSECURE=true")
+	clientsFile := strings.TrimSpace(os.Getenv("WAYMINDER_CLIENTS_FILE"))
+	if clientsFile != "" {
+		clients, err := loadAuthClients(clientsFile)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.AuthClients = clients
+	}
+	if cfg.AuthToken == "" && len(cfg.AuthClients) == 0 && !cfg.AllowInsecure {
+		return Config{}, fmt.Errorf("WAYMINDER_AUTH_TOKEN or WAYMINDER_CLIENTS_FILE is required unless WAYMINDER_ALLOW_INSECURE=true")
 	}
 	if len(cfg.AuthToken) > 0 && len(cfg.AuthToken) < 32 {
 		return Config{}, fmt.Errorf("WAYMINDER_AUTH_TOKEN must be at least 32 characters")
@@ -51,6 +76,9 @@ func Load() (Config, error) {
 	if cfg.MaxMemoryBytes < 256 {
 		return Config{}, fmt.Errorf("WAYMINDER_MAX_MEMORY_BYTES must be at least 256")
 	}
+	if cfg.RateLimitPerMinute <= 0 || cfg.RateLimitBurst <= 0 {
+		return Config{}, fmt.Errorf("WAYMINDER_RATE_LIMIT_PER_MINUTE and WAYMINDER_RATE_LIMIT_BURST must be positive")
+	}
 	if len(cfg.AllowedHosts) == 0 && !cfg.AllowInsecure {
 		return Config{}, fmt.Errorf("WAYMINDER_ALLOWED_HOSTS must not be empty")
 	}
@@ -60,6 +88,39 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func loadAuthClients(path string) ([]AuthClient, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read WAYMINDER_CLIENTS_FILE: %w", err)
+	}
+	var registry struct {
+		Clients []AuthClient `json:"clients"`
+	}
+	if err := json.Unmarshal(data, &registry); err != nil {
+		return nil, fmt.Errorf("parse WAYMINDER_CLIENTS_FILE: %w", err)
+	}
+	seenIDs, seenHashes := map[string]bool{}, map[string]bool{}
+	for i, client := range registry.Clients {
+		client.ID = strings.TrimSpace(client.ID)
+		client.TokenSHA256 = strings.ToLower(strings.TrimSpace(client.TokenSHA256))
+		if !validClientID.MatchString(client.ID) {
+			return nil, fmt.Errorf("client %d has an invalid id", i)
+		}
+		if !validSHA256.MatchString(client.TokenSHA256) {
+			return nil, fmt.Errorf("client %q has an invalid token_sha256", client.ID)
+		}
+		if seenIDs[client.ID] || seenHashes[client.TokenSHA256] {
+			return nil, fmt.Errorf("client registry contains a duplicate id or token hash")
+		}
+		seenIDs[client.ID], seenHashes[client.TokenSHA256] = true, true
+		registry.Clients[i] = client
+	}
+	if len(registry.Clients) == 0 {
+		return nil, fmt.Errorf("WAYMINDER_CLIENTS_FILE contains no clients")
+	}
+	return registry.Clients, nil
 }
 
 func env(name, fallback string) string {

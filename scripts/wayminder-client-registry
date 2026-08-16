@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Rotate or revoke Wayminder clients without retaining plaintext tokens."""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import secrets
+import stat
+import tempfile
+
+VALID_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def read_registry(path):
+    try:
+        with open(path, encoding="utf-8") as source:
+            value = json.load(source)
+    except FileNotFoundError:
+        value = {"clients": []}
+    clients = value.get("clients")
+    if not isinstance(clients, list):
+        raise SystemExit("invalid registry: clients must be a list")
+    seen_ids = set()
+    seen_hashes = set()
+    for item in clients:
+        if not isinstance(item, dict) or not VALID_ID.fullmatch(item.get("id", "")):
+            raise SystemExit("invalid client entry in registry")
+        digest = item.get("token_sha256", "")
+        if not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise SystemExit("invalid client token hash in registry")
+        if item["id"] in seen_ids or digest in seen_hashes:
+            raise SystemExit("duplicate client id or token hash in registry")
+        seen_ids.add(item["id"])
+        seen_hashes.add(digest)
+    return value
+
+
+def write_registry(path, value):
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    try:
+        existing = os.stat(path)
+        owner = (existing.st_uid, existing.st_gid)
+    except FileNotFoundError:
+        owner = (65532, 65532) if os.geteuid() == 0 else None
+    descriptor, temporary = tempfile.mkstemp(prefix="clients.", dir=directory, text=True)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(value, output, separators=(",", ":"), sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, stat.S_IRUSR)
+        if owner is not None:
+            os.chown(temporary, *owner)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--registry", default="secrets/clients.json")
+    commands = parser.add_subparsers(dest="command", required=True)
+    rotate = commands.add_parser("rotate")
+    rotate.add_argument("client_id")
+    revoke = commands.add_parser("revoke")
+    revoke.add_argument("client_id")
+    args = parser.parse_args()
+    if not VALID_ID.fullmatch(args.client_id):
+        raise SystemExit("invalid client id")
+    value = read_registry(args.registry)
+    clients = [item for item in value["clients"] if item.get("id") != args.client_id]
+    if args.command == "rotate":
+        token = secrets.token_hex(32)
+        clients.append({"id": args.client_id, "token_sha256": hashlib.sha256(token.encode()).hexdigest()})
+    elif not clients:
+        raise SystemExit("refusing to revoke the final client")
+    value["clients"] = sorted(clients, key=lambda item: item["id"])
+    write_registry(args.registry, value)
+    if args.command == "rotate":
+        print(token)
+
+
+if __name__ == "__main__":
+    main()

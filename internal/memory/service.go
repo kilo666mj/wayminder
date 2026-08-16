@@ -35,7 +35,7 @@ type Store interface {
 	Replace(context.Context, string, Memory, []float32) (Memory, error)
 	Recall(context.Context, []float32, string, []string, string, int) ([]Memory, error)
 	List(context.Context, []string, string, int, string) ([]Memory, error)
-	Forget(context.Context, string) (Memory, error)
+	Forget(context.Context, string, Principal) (Memory, error)
 	Stats(context.Context) (Stats, error)
 	Ping(context.Context) error
 }
@@ -62,6 +62,10 @@ func (s *Service) Remember(ctx context.Context, request RememberRequest, princip
 	request.Kind = defaultString(strings.ToLower(strings.TrimSpace(request.Kind)), "reference")
 	request.Scope = defaultString(strings.TrimSpace(request.Scope), "global")
 	request.Tags = normalizeTags(request.Tags)
+	principal = normalizePrincipal(principal)
+	if err := validatePrincipal(principal); err != nil {
+		return RememberResult{}, err
+	}
 	if err := s.validateWrite(request); err != nil {
 		return RememberResult{}, err
 	}
@@ -148,6 +152,10 @@ func (s *Service) Supersede(ctx context.Context, id string, request RememberRequ
 		request.Tags = existing.Tags
 	}
 	request.Tags = normalizeTags(request.Tags)
+	principal = normalizePrincipal(principal)
+	if err := validatePrincipal(principal); err != nil {
+		return Memory{}, err
+	}
 	if err := s.validateWrite(request); err != nil {
 		return Memory{}, err
 	}
@@ -165,11 +173,15 @@ func (s *Service) Supersede(ctx context.Context, id string, request RememberRequ
 	return s.store.Replace(ctx, id, replacement, vectors[0])
 }
 
-func (s *Service) Forget(ctx context.Context, id string) (Memory, error) {
+func (s *Service) Forget(ctx context.Context, id string, principal Principal) (Memory, error) {
 	if _, err := ulid.ParseStrict(id); err != nil {
 		return Memory{}, errors.New("invalid memory id")
 	}
-	return s.store.Forget(ctx, id)
+	principal = normalizePrincipal(principal)
+	if err := validatePrincipal(principal); err != nil {
+		return Memory{}, err
+	}
+	return s.store.Forget(ctx, id, principal)
 }
 
 func (s *Service) Stats(ctx context.Context) (Stats, error) { return s.store.Stats(ctx) }
@@ -209,10 +221,33 @@ func (s *Service) validateWrite(request RememberRequest) error {
 	if err := validateScope(request.Scope); err != nil {
 		return err
 	}
-	for _, pattern := range secretPatterns {
-		if pattern.MatchString(request.Content) {
-			return errors.New("content appears to contain a secret; memory was not stored")
+	fields := append([]string{request.Content, request.Summary, request.Scope}, request.Tags...)
+	for _, value := range fields {
+		if containsLikelySecret(value) {
+			return errors.New("memory metadata appears to contain a secret; memory was not stored")
 		}
+	}
+	return nil
+}
+
+func containsLikelySecret(value string) bool {
+	for _, pattern := range secretPatterns {
+		if pattern.MatchString(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizePrincipal(principal Principal) Principal {
+	principal.Agent = cleanLabel(principal.Agent, 128)
+	principal.Source = cleanLabel(principal.Source, 256)
+	return principal
+}
+
+func validatePrincipal(principal Principal) error {
+	if containsLikelySecret(principal.Agent) || containsLikelySecret(principal.Source) {
+		return errors.New("provenance appears to contain a secret; memory was not stored")
 	}
 	return nil
 }

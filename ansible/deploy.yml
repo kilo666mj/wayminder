@@ -29,7 +29,6 @@
             {
               echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
               echo "WAYMINDER_DB_PASSWORD=$(openssl rand -hex 32)"
-              echo "WAYMINDER_AUTH_TOKEN=$(openssl rand -hex 32)"
               echo "WAYMINDER_BIND_ADDRESS=0.0.0.0"
               echo "WAYMINDER_PORT=8080"
               echo "WAYMINDER_ALLOWED_HOSTS=localhost,127.0.0.1,deployment-host,deployment-host.example.com,wayminder.example.com"
@@ -41,9 +40,66 @@
         creates: "{{ wayminder_dir }}/.env"
       no_log: true
 
+    - name: Create client credential directory
+      ansible.builtin.file:
+        path: "{{ wayminder_dir }}/secrets"
+        state: directory
+        mode: "0700"
+
+    - name: Require the hash-only client registry
+      ansible.builtin.stat:
+        path: "{{ wayminder_dir }}/secrets/clients.json"
+      register: client_registry
+
+    - name: Stop when client credentials have not been provisioned
+      ansible.builtin.assert:
+        that: client_registry.stat.exists
+        fail_msg: >-
+          Provision at least one client with scripts/wayminder-client-registry
+          before starting Wayminder.
+
+    - name: Restrict hash-only client registry
+      ansible.builtin.file:
+        path: "{{ wayminder_dir }}/secrets/clients.json"
+        owner: "65532"
+        group: "65532"
+        mode: "0400"
+
+    - name: Remove retained plaintext client credentials
+      ansible.builtin.shell:
+        cmd: find secrets -maxdepth 1 -type f -name '*.token' -print -delete
+        chdir: "{{ wayminder_dir }}"
+      register: removed_plaintext_credentials
+      changed_when: removed_plaintext_credentials.stdout != ''
+      no_log: true
+
+    - name: Enable registered client authentication
+      ansible.builtin.lineinfile:
+        path: "{{ wayminder_dir }}/.env"
+        regexp: '^WAYMINDER_CLIENTS_FILE='
+        line: 'WAYMINDER_CLIENTS_FILE=/run/secrets/wayminder-clients.json'
+        mode: "0600"
+      no_log: true
+
+    - name: Retire legacy shared authentication token
+      ansible.builtin.lineinfile:
+        path: "{{ wayminder_dir }}/.env"
+        regexp: '^WAYMINDER_AUTH_TOKEN='
+        state: absent
+        mode: "0600"
+      no_log: true
+
+    - name: Restrict Wayminder backend to the local reverse proxy
+      ansible.builtin.lineinfile:
+        path: "{{ wayminder_dir }}/.env"
+        regexp: '^WAYMINDER_BIND_ADDRESS='
+        line: 'WAYMINDER_BIND_ADDRESS=127.0.0.1'
+        mode: "0600"
+      no_log: true
+
     - name: Start Wayminder
       ansible.builtin.command:
-        cmd: docker compose up -d --build
+        cmd: docker compose up -d --build --force-recreate wayminder
         chdir: "{{ wayminder_dir }}"
       register: compose_up
       changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr or 'Built' in compose_up.stderr"
