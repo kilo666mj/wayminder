@@ -1,0 +1,58 @@
+---
+- name: Deploy Wayminder
+  hosts: wayminder
+  become: false
+  vars:
+    wayminder_dir: /opt/wayminder
+  tasks:
+    - name: Create deployment directory
+      ansible.builtin.file:
+        path: "{{ wayminder_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy Wayminder source
+      ansible.posix.synchronize:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ wayminder_dir }}/"
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.env"
+          - "--exclude=ansible"
+
+    - name: Create secrets on first deployment
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          umask 077
+          if [ ! -f .env ]; then
+            {
+              echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
+              echo "WAYMINDER_DB_PASSWORD=$(openssl rand -hex 32)"
+              echo "WAYMINDER_AUTH_TOKEN=$(openssl rand -hex 32)"
+              echo "WAYMINDER_BIND_ADDRESS=0.0.0.0"
+              echo "WAYMINDER_PORT=8080"
+              echo "WAYMINDER_ALLOWED_HOSTS=localhost,127.0.0.1,deployment-host,deployment-host.example.com"
+              echo "WAYMINDER_EMBED_MODEL=nomic-embed-text"
+              echo "WAYMINDER_EMBED_DIMENSION=768"
+            } > .env
+          fi
+        chdir: "{{ wayminder_dir }}"
+        creates: "{{ wayminder_dir }}/.env"
+      no_log: true
+
+    - name: Start Wayminder
+      ansible.builtin.command:
+        cmd: docker compose up -d --build
+        chdir: "{{ wayminder_dir }}"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr or 'Built' in compose_up.stderr"
+
+    - name: Wait for Wayminder readiness
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/readyz
+        status_code: 200
+      register: readiness
+      retries: 30
+      delay: 2
+      until: readiness.status == 200

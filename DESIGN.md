@@ -1,6 +1,6 @@
 # Wayminder design and implementation plan
 
-Status: proposed  
+Status: MVP implemented
 Project: `kilo666mj/wayminder`  
 Deployment target: `deployment-host`  
 Tagline: **Remember the way.**
@@ -66,8 +66,7 @@ The initial Docker Compose stack will contain:
 
 1. `wayminder`: the Go MCP and health/API service;
 2. `postgres`: PostgreSQL with the pgvector extension;
-3. an optional local embedding container or endpoint, selected after a benchmark
-   on `deployment-host`.
+3. Ollama running `nomic-embed-text` locally.
 
 PostgreSQL will only be reachable on the private Compose network. Wayminder will
 be the sole database client exposed to other hosts.
@@ -97,10 +96,10 @@ The default should be a compact local English embedding model. The model and its
 vector dimension are deployment-coupled configuration: changing either requires
 re-embedding every live memory or creating a new vector column.
 
-Candidates for the first benchmark:
-
-- `BAAI/bge-small-en-v1.5` through an ONNX-capable local provider;
-- a compact Ollama embedding model such as `nomic-embed-text`.
+The MVP uses `nomic-embed-text` through Ollama (768 dimensions). Ollama owns
+tokenization, pooling, normalization, model download, and process lifecycle.
+An ONNX adapter remains a possible later optimization if deployment-host benchmarks show
+that removing the sidecar is worth the CGO and native-runtime complexity.
 
 The provider interface will keep the application independent of the initial
 runtime:
