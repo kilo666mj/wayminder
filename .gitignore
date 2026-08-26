@@ -1,4 +1,5 @@
 .env
+ansible/inventory.ini
 secrets/
 .idea/
 .vscode/

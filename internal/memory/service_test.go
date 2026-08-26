@@ -58,7 +58,7 @@ func TestEffectiveScopes(t *testing.T) {
 func TestRememberCreatesMemory(t *testing.T) {
 	store := &fakeStore{}
 	service := NewService(store, fakeEmbedder{[]float32{1, 2, 3}}, .92, 1024)
-	result, err := service.Remember(context.Background(), RememberRequest{Content: "Postgres runs on deployment-host", Scope: "host:deployment-host"}, Principal{Agent: "codex"})
+	result, err := service.Remember(context.Background(), RememberRequest{Content: "Postgres runs on app-host", Scope: "host:app-host"}, Principal{Agent: "codex"})
 	if err != nil {
 		t.Fatalf("Remember() error = %v", err)
 	}

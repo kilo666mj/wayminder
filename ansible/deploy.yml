@@ -31,7 +31,7 @@
               echo "WAYMINDER_DB_PASSWORD=$(openssl rand -hex 32)"
               echo "WAYMINDER_BIND_ADDRESS=0.0.0.0"
               echo "WAYMINDER_PORT=8080"
-              echo "WAYMINDER_ALLOWED_HOSTS=localhost,127.0.0.1,deployment-host,deployment-host.example.com,wayminder.example.com"
+              echo "WAYMINDER_ALLOWED_HOSTS=localhost,127.0.0.1,wayminder.example.com"
               echo "WAYMINDER_EMBED_MODEL=nomic-embed-text"
               echo "WAYMINDER_EMBED_DIMENSION=768"
             } > .env

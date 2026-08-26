@@ -1,6 +1,6 @@
 # CLAUDE.md - Wayminder
 
-Wayminder is a private, local-first MCP memory service for Codex and Claude Code.
+Wayminder is a self-hosted, local-first MCP memory service for Codex and Claude Code.
 It is a Go application backed by PostgreSQL/pgvector with local Ollama
 embeddings.
 

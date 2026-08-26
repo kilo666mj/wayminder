@@ -2,7 +2,7 @@
 
 **Remember the way.**
 
-Wayminder is a private, local-first memory service for Codex, Claude Code, and
+Wayminder is a self-hosted, local-first memory service for Codex, Claude Code, and
 other MCP clients. It stores durable agent knowledge in PostgreSQL/pgvector and
 uses a local Ollama embedding model for hybrid semantic and lexical recall.
 
@@ -100,9 +100,10 @@ make config
 The unit suite does not need Docker. `make up` exercises the real Ollama and
 pgvector path.
 
-## Deploy to deployment-host
+## Deploy
 
 ```sh
+cp ansible/inventory.example.ini ansible/inventory.ini
 ansible-playbook -i ansible/inventory.ini ansible/deploy.yml
 ```
 

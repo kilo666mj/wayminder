@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deliberate fake credentials used to test secret rejection"
+paths = [
+  '''internal/config/config_test\.go''',
+  '''internal/memory/service_test\.go''',
+  '''internal/server/server_test\.go''',
+]

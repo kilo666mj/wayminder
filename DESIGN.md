@@ -1,13 +1,13 @@
 # Wayminder design and implementation plan
 
 Status: MVP implemented
-Project: `kilo666mj/wayminder`  
-Deployment target: `deployment-host`  
+Project: `wayminder`
+Deployment target: a small self-hosted Linux server
 Tagline: **Remember the way.**
 
 ## 1. Purpose
 
-Wayminder is a private, local-first memory service for AI agents. It allows
+Wayminder is a self-hosted, local-first memory service for AI agents. It allows
 Codex, Claude Code, and other MCP-compatible agents to share durable knowledge
 across sessions without sending memory contents to an external embedding API.
 
@@ -31,7 +31,7 @@ speculation, and short-lived task state do not belong in long-term memory.
   `host:<name>`.
 - Preserve provenance and version history for every mutation.
 - Prefer deterministic behavior in the request path.
-- Remain small enough to operate as a Docker Compose stack on `deployment-host`.
+- Remain small enough to operate as a Docker Compose stack on a modest server.
 - Make retrieval behavior observable and explainable.
 - Support backup and human-readable export without making files the primary
   database.
@@ -98,7 +98,7 @@ re-embedding every live memory or creating a new vector column.
 
 The MVP uses `nomic-embed-text` through Ollama (768 dimensions). Ollama owns
 tokenization, pooling, normalization, model download, and process lifecycle.
-An ONNX adapter remains a possible later optimization if deployment-host benchmarks show
+An ONNX adapter remains a possible later optimization if deployment benchmarks show
 that removing the sidecar is worth the CGO and native-runtime complexity.
 
 The provider interface will keep the application independent of the initial
@@ -112,8 +112,8 @@ type Embedder interface {
 }
 ```
 
-The `deployment-host` host has four AVX2-capable vCPUs and enough memory for a compact
-embedding model. The choice will be based on measured warm latency, cold-start
+The intended deployment class has enough CPU and memory for a compact embedding
+model. The choice will be based on measured warm latency, cold-start
 behavior, image size, and operational complexity.
 
 ## 6. Data model
@@ -272,7 +272,7 @@ activity summary—not complete memory content. Repository-level `AGENTS.md` and
 ### Deployment
 
 - Multi-stage Docker build producing a minimal runtime image.
-- Docker Compose deployment on `deployment-host`.
+- Docker Compose deployment on a self-hosted Linux server.
 - Named Postgres volume stored on local disk.
 - Health checks for PostgreSQL, the embedding provider, and Wayminder.
 - `restart: unless-stopped` for long-running services.
@@ -313,7 +313,7 @@ mode may propose changes, but every mutation must remain auditable.
 - Initialize the Go module and repository conventions.
 - Add configuration parsing, logging, health endpoints, and graceful shutdown.
 - Benchmark candidate local embedding providers on representative short and long
-  texts on `deployment-host`.
+  texts on the deployment host.
 - Lock the initial model and vector dimension.
 
 Exit condition: a documented embedding decision and a containerized Go service
@@ -343,13 +343,13 @@ Exit condition: both clients can safely share scoped memories.
 
 ### Phase 3 — deployment hardening
 
-- Add production Compose configuration for `deployment-host`.
+- Add production Compose configuration for the deployment host.
 - Remove all default credentials and host-published database ports.
 - Configure private networking, host allowlists, backups, and scheduled
   maintenance.
 - Add resource limits and failure/recovery tests.
 
-Exit condition: unattended operation on `deployment-host` with a tested backup and restore
+Exit condition: unattended operation on the deployment host with a tested backup and restore
 procedure.
 
 ### Phase 4 — explainability and portability
@@ -384,7 +384,7 @@ database access.
 3. Retention duration for soft-deleted memories and recall traces.
 4. Whether explicit memory links belong in the first database migration or a
    later migration.
-5. Private reverse proxy/TLS arrangement between agent clients and `deployment-host`.
+5. Private reverse proxy/TLS arrangement between agent clients and the service.
 
 These decisions do not block repository setup. Phase 0 resolves the embedding
 choice with measurements before the database schema fixes a vector dimension.

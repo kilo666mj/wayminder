@@ -43,7 +43,7 @@ func Load() (Config, error) {
 		DatabaseURL:        env("WAYMINDER_DATABASE_URL", "postgres://wayminder_app:wayminder@localhost:5432/wayminder?sslmode=disable"),
 		AuthToken:          strings.TrimSpace(os.Getenv("WAYMINDER_AUTH_TOKEN")),
 		AllowInsecure:      envBool("WAYMINDER_ALLOW_INSECURE", false),
-		AllowedHosts:       splitCSV(env("WAYMINDER_ALLOWED_HOSTS", "localhost,127.0.0.1,deployment-host,deployment-host.example.com")),
+		AllowedHosts:       splitCSV(env("WAYMINDER_ALLOWED_HOSTS", "localhost,127.0.0.1")),
 		OllamaURL:          strings.TrimRight(env("WAYMINDER_OLLAMA_URL", "http://localhost:11434"), "/"),
 		EmbeddingModel:     env("WAYMINDER_EMBED_MODEL", "nomic-embed-text"),
 		EmbeddingDimension: envInt("WAYMINDER_EMBED_DIMENSION", 768),
