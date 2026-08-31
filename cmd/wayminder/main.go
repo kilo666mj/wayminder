@@ -35,8 +35,13 @@ func main() {
 
 	embedder := embed.NewOllama(cfg.OllamaURL, cfg.EmbeddingModel, cfg.EmbeddingDimension, cfg.RequestTimeout)
 	service := memory.NewService(database, embedder, cfg.DedupThreshold, cfg.MaxMemoryBytes)
+	handler, err := server.NewHandler(cfg, service, logger)
+	if err != nil {
+		logger.Error("MCP server startup failed", "error", err)
+		os.Exit(1)
+	}
 	httpServer := &http.Server{
-		Addr: cfg.ListenAddress, Handler: server.NewHandler(cfg, service, logger),
+		Addr: cfg.ListenAddress, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.RequestTimeout,
 		WriteTimeout: cfg.RequestTimeout + 5*time.Second, IdleTimeout: 2 * time.Minute,
 	}

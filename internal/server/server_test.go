@@ -8,12 +8,123 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/kilo666mj/mcpkit/mcpkittest"
 	"github.com/kilo666mj/wayminder/internal/config"
 	"github.com/kilo666mj/wayminder/internal/memory"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type mcpTestStore struct{}
+
+func (mcpTestStore) Get(context.Context, string, bool) (memory.Memory, error) {
+	return memory.Memory{}, nil
+}
+func (mcpTestStore) FindDuplicate(context.Context, []float32, string, float64) (*memory.Memory, error) {
+	return nil, nil
+}
+func (mcpTestStore) Insert(_ context.Context, item memory.Memory, _ []float32) (memory.Memory, error) {
+	return item, nil
+}
+func (mcpTestStore) Replace(_ context.Context, _ string, item memory.Memory, _ []float32) (memory.Memory, error) {
+	return item, nil
+}
+func (mcpTestStore) Recall(context.Context, []float32, string, []string, string, int) ([]memory.Memory, error) {
+	return nil, nil
+}
+func (mcpTestStore) List(context.Context, []string, string, int, string) ([]memory.Memory, error) {
+	return nil, nil
+}
+func (mcpTestStore) Forget(context.Context, string, memory.Principal) (memory.Memory, error) {
+	return memory.Memory{}, nil
+}
+func (mcpTestStore) Stats(context.Context) (memory.Stats, error) {
+	return memory.Stats{Live: 2, ByScope: map[string]int64{"global": 2}}, nil
+}
+func (mcpTestStore) Ping(context.Context) error { return nil }
+
+type mcpTestEmbedder struct{}
+
+func (mcpTestEmbedder) Embed(context.Context, []string) ([][]float32, error) {
+	return [][]float32{{1, 2, 3}}, nil
+}
+func (mcpTestEmbedder) Ping(context.Context) error { return nil }
+func (mcpTestEmbedder) Dimension() int             { return 3 }
+func (mcpTestEmbedder) Model() string              { return "test" }
+
+func testService() *memory.Service {
+	return memory.NewService(mcpTestStore{}, mcpTestEmbedder{}, .92, 1024)
+}
+
+func TestMCPServerPublishesStableAnnotatedToolSurface(t *testing.T) {
+	session := mcpkittest.Connect(t, newMCPServer(testService(), slog.New(slog.NewTextHandler(io.Discard, nil))))
+	listed, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"forget", "list_memories", "recall", "remember", "status", "supersede"}
+	got := make([]string, 0, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		got = append(got, tool.Name)
+		if tool.Annotations == nil {
+			t.Errorf("tool %q has no safety annotations", tool.Name)
+			continue
+		}
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("tool names = %v, want %v", got, want)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Annotations == nil {
+			continue
+		}
+		readOnly := slices.Contains([]string{"list_memories", "recall", "status"}, tool.Name)
+		destructive := slices.Contains([]string{"forget", "supersede"}, tool.Name)
+		if tool.Annotations.ReadOnlyHint != readOnly || *tool.Annotations.DestructiveHint != destructive || *tool.Annotations.OpenWorldHint {
+			t.Errorf("tool %q annotations = %+v", tool.Name, tool.Annotations)
+		}
+	}
+}
+
+func TestHandlerRetainsAuthenticationAndRequestLimit(t *testing.T) {
+	cfg := config.Config{
+		AuthToken: "0123456789abcdef0123456789abcdef", AllowedHosts: []string{"wayminder"},
+		MaxMemoryBytes: 8, RateLimitPerMinute: 1000, RateLimitBurst: 100,
+	}
+	handler, err := NewHandler(cfg, testService(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://wayminder/mcp", strings.NewReader(strings.Repeat("x", cfg.MaxMemoryBytes+64*1024+1)))
+	request.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized authenticated MCP request status = %d, want 413; body=%q", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://wayminder/mcp", strings.NewReader(`{}`))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated MCP request status = %d, want 401", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://wayminder/mcp", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	request.Header.Set("Origin", "https://attacker.example")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin MCP request status = %d, want 403", response.Code)
+	}
+}
 
 func TestAuthMiddleware(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })

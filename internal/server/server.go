@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kilo666mj/mcpkit"
 	"github.com/kilo666mj/wayminder/internal/config"
 	"github.com/kilo666mj/wayminder/internal/memory"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -73,75 +74,18 @@ type statusOutput struct {
 	Stats              memory.Stats `json:"stats"`
 }
 
-func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger) http.Handler {
-	instructions := buildInstructions(context.Background(), service)
-	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "wayminder", Version: version},
-		&mcp.ServerOptions{Instructions: instructions, Logger: logger},
-	)
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "remember",
-		Description: "Store verified knowledge that will remain useful after this task. Use the narrowest correct scope. Never store secrets, credentials, transient logs, or speculation.",
-	}, func(ctx context.Context, request *mcp.CallToolRequest, input rememberInput) (*mcp.CallToolResult, memory.RememberResult, error) {
-		result, err := service.Remember(ctx, memory.RememberRequest{
-			Content: input.Content, Summary: input.Summary, Kind: input.Kind, Scope: input.Scope, Tags: input.Tags,
-		}, principal(ctx, request))
-		return nil, result, err
+func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger) (http.Handler, error) {
+	mcpServer := newMCPServer(service, logger)
+	mcpHandler, err := mcpkit.StatelessHTTP(func(*http.Request) *mcp.Server { return mcpServer }, mcpkit.HTTPOptions{
+		MaxRequestBodyBytes: int64(cfg.MaxMemoryBytes + 64*1024),
+		Logger:              logger,
+		// Wayminder's outer host middleware enforces its explicit configured
+		// allowlist before requests reach MCP, including behind a reverse proxy.
+		DisableLocalhostProtection: true,
 	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "recall",
-		Description: "Search durable memory before relying on assumptions. Recall searches global and personal memory plus the requested scope. " + instructions,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input recallInput) (*mcp.CallToolResult, memoriesOutput, error) {
-		items, err := service.Recall(ctx, memory.RecallRequest{Query: input.Query, Scope: input.Scope, Kind: input.Kind, Limit: input.Limit})
-		return nil, memoriesOutput{Memories: items}, err
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "list_memories",
-		Description: "List recent live memories visible in a scope. Use the final returned ULID as the before cursor.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, memoriesOutput, error) {
-		items, err := service.List(ctx, memory.ListRequest{Scope: input.Scope, Kind: input.Kind, Limit: input.Limit, Before: input.Before})
-		return nil, memoriesOutput{Memories: items}, err
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "supersede",
-		Description: "Replace incorrect or stale knowledge while preserving its version history. Omitted metadata is inherited from the old memory.",
-	}, func(ctx context.Context, request *mcp.CallToolRequest, input supersedeInput) (*mcp.CallToolResult, memoryOutput, error) {
-		item, err := service.Supersede(ctx, input.ID, memory.RememberRequest{
-			Content: input.Content, Summary: input.Summary, Kind: input.Kind, Scope: input.Scope, Tags: input.Tags,
-		}, principal(ctx, request))
-		return nil, memoryOutput{Memory: item}, err
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "forget",
-		Description: "Soft-delete a memory that should no longer appear in normal recall.",
-	}, func(ctx context.Context, request *mcp.CallToolRequest, input idInput) (*mcp.CallToolResult, memoryOutput, error) {
-		item, err := service.Forget(ctx, input.ID, principal(ctx, request))
-		return nil, memoryOutput{Memory: item}, err
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "status",
-		Description: "Report Wayminder health metadata and live memory counts.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, statusOutput, error) {
-		stats, err := service.Stats(ctx)
-		model, dimension := service.EmbeddingInfo()
-		return nil, statusOutput{
-			Status: "ok", Version: version, EmbeddingModel: model,
-			EmbeddingDimension: dimension, Stats: stats,
-		}, err
-	})
-
-	mcpHandler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return mcpServer },
-		&mcp.StreamableHTTPOptions{
-			Stateless: true, JSONResponse: true, MaxRequestBodyBytes: int64(cfg.MaxMemoryBytes + 64*1024), Logger: logger,
-		},
-	)
+	if err != nil {
+		return nil, fmt.Errorf("create MCP HTTP handler: %w", err)
+	}
 	protectedMCP := authMiddleware(cfg.AuthToken, cfg.AuthClients, cfg.AllowInsecure,
 		newClientRateLimiter(cfg.RateLimitPerMinute, cfg.RateLimitBurst), mcpHandler)
 
@@ -154,7 +98,78 @@ func NewHandler(cfg config.Config, service *memory.Service, logger *slog.Logger)
 	mux.Handle("GET /readyz", readinessHandler(logger, func(ctx context.Context) error {
 		return service.Ready(ctx)
 	}))
-	return loggingMiddleware(logger, hostMiddleware(cfg.AllowedHosts, cfg.AllowInsecure, mux))
+	return loggingMiddleware(logger, hostMiddleware(cfg.AllowedHosts, cfg.AllowInsecure, mux)), nil
+}
+
+func newMCPServer(service *memory.Service, logger *slog.Logger) *mcp.Server {
+	instructions := buildInstructions(context.Background(), service)
+	mcpServer := mcpkit.MustServer(mcpkit.ServerConfig{
+		Name: "wayminder", Version: version, Instructions: instructions, Logger: logger,
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "remember",
+		Description: "Store verified knowledge that will remain useful after this task. Use the narrowest correct scope. Never store secrets, credentials, transient logs, or speculation.",
+		Annotations: mcpkit.Mutating(false, false),
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input rememberInput) (*mcp.CallToolResult, memory.RememberResult, error) {
+		result, err := service.Remember(ctx, memory.RememberRequest{
+			Content: input.Content, Summary: input.Summary, Kind: input.Kind, Scope: input.Scope, Tags: input.Tags,
+		}, principal(ctx, request))
+		return nil, result, err
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "recall",
+		Description: "Search durable memory before relying on assumptions. Recall searches global and personal memory plus the requested scope. " + instructions,
+		Annotations: mcpkit.ReadOnly(false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input recallInput) (*mcp.CallToolResult, memoriesOutput, error) {
+		items, err := service.Recall(ctx, memory.RecallRequest{Query: input.Query, Scope: input.Scope, Kind: input.Kind, Limit: input.Limit})
+		return nil, memoriesOutput{Memories: items}, err
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_memories",
+		Description: "List recent live memories visible in a scope. Use the final returned ULID as the before cursor.",
+		Annotations: mcpkit.ReadOnly(false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, memoriesOutput, error) {
+		items, err := service.List(ctx, memory.ListRequest{Scope: input.Scope, Kind: input.Kind, Limit: input.Limit, Before: input.Before})
+		return nil, memoriesOutput{Memories: items}, err
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "supersede",
+		Description: "Replace incorrect or stale knowledge while preserving its version history. Omitted metadata is inherited from the old memory.",
+		Annotations: mcpkit.Destructive(false, false),
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input supersedeInput) (*mcp.CallToolResult, memoryOutput, error) {
+		item, err := service.Supersede(ctx, input.ID, memory.RememberRequest{
+			Content: input.Content, Summary: input.Summary, Kind: input.Kind, Scope: input.Scope, Tags: input.Tags,
+		}, principal(ctx, request))
+		return nil, memoryOutput{Memory: item}, err
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "forget",
+		Description: "Soft-delete a memory that should no longer appear in normal recall.",
+		Annotations: mcpkit.Destructive(false, false),
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input idInput) (*mcp.CallToolResult, memoryOutput, error) {
+		item, err := service.Forget(ctx, input.ID, principal(ctx, request))
+		return nil, memoryOutput{Memory: item}, err
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "status",
+		Description: "Report Wayminder health metadata and live memory counts.",
+		Annotations: mcpkit.ReadOnly(false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, statusOutput, error) {
+		stats, err := service.Stats(ctx)
+		model, dimension := service.EmbeddingInfo()
+		return nil, statusOutput{
+			Status: "ok", Version: version, EmbeddingModel: model,
+			EmbeddingDimension: dimension, Stats: stats,
+		}, err
+	})
+
+	return mcpServer
 }
 
 func readinessHandler(logger *slog.Logger, ready func(context.Context) error) http.Handler {
