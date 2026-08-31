@@ -66,7 +66,7 @@ services:
       ollama-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      test: ["CMD", "/wayminder-healthcheck", "http://127.0.0.1:8080/readyz"]
       interval: 10s
       timeout: 5s
       retries: 12
