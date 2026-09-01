@@ -113,12 +113,12 @@ func (p *Postgres) FindDuplicate(ctx context.Context, embedding []float32, scope
 	return &item, nil
 }
 
-func (p *Postgres) Insert(ctx context.Context, item memory.Memory, embedding []float32) (memory.Memory, error) {
+func (p *Postgres) Insert(ctx context.Context, item memory.Memory, embedding []float32) (_ memory.Memory, err error) {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return memory.Memory{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx, &err)
 	row := tx.QueryRow(ctx, `
 		INSERT INTO memories (
 			id, content, summary, kind, scope, tags, embedding, embedding_model,
@@ -141,12 +141,12 @@ func (p *Postgres) Insert(ctx context.Context, item memory.Memory, embedding []f
 	return stored, nil
 }
 
-func (p *Postgres) Replace(ctx context.Context, oldID string, replacement memory.Memory, embedding []float32) (memory.Memory, error) {
+func (p *Postgres) Replace(ctx context.Context, oldID string, replacement memory.Memory, embedding []float32) (_ memory.Memory, err error) {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return memory.Memory{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx, &err)
 	var lockedID string
 	if err := tx.QueryRow(ctx,
 		"SELECT id FROM memories WHERE id = $1 AND deleted_at IS NULL FOR UPDATE", oldID,
@@ -263,12 +263,12 @@ func (p *Postgres) List(ctx context.Context, scopes []string, kind string, limit
 	return result, rows.Err()
 }
 
-func (p *Postgres) Forget(ctx context.Context, id string, principal memory.Principal) (memory.Memory, error) {
+func (p *Postgres) Forget(ctx context.Context, id string, principal memory.Principal) (_ memory.Memory, err error) {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return memory.Memory{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx, &err)
 	row := tx.QueryRow(ctx, `
 		UPDATE memories SET deleted_at = now(), updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
@@ -287,6 +287,16 @@ func (p *Postgres) Forget(ctx context.Context, id string, principal memory.Princ
 		return memory.Memory{}, err
 	}
 	return item, nil
+}
+
+type transactionRollbacker interface {
+	Rollback(context.Context) error
+}
+
+func rollbackTransaction(ctx context.Context, tx transactionRollbacker, errp *error) {
+	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		*errp = errors.Join(*errp, fmt.Errorf("rollback transaction: %w", err))
+	}
 }
 
 type auditExecer interface {

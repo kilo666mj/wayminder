@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -52,7 +53,7 @@ func (o *Ollama) Embed(ctx context.Context, texts []string) ([][]float32, error)
 	return response.Embeddings, nil
 }
 
-func (o *Ollama) Ping(ctx context.Context) error {
+func (o *Ollama) Ping(ctx context.Context) (err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.baseURL+"/api/tags", nil)
 	if err != nil {
 		return err
@@ -61,14 +62,14 @@ func (o *Ollama) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ollama readiness: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body, &err)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("ollama readiness returned %s", resp.Status)
 	}
 	return nil
 }
 
-func (o *Ollama) post(ctx context.Context, path string, input, output any) error {
+func (o *Ollama) post(ctx context.Context, path string, input, output any) (err error) {
 	body, err := json.Marshal(input)
 	if err != nil {
 		return err
@@ -82,7 +83,7 @@ func (o *Ollama) post(ctx context.Context, path string, input, output any) error
 	if err != nil {
 		return fmt.Errorf("ollama request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body, &err)
 	if resp.StatusCode/100 != 2 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("ollama returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
@@ -91,4 +92,10 @@ func (o *Ollama) post(ctx context.Context, path string, input, output any) error
 		return fmt.Errorf("decode ollama response: %w", err)
 	}
 	return nil
+}
+
+func closeResponseBody(body io.Closer, errp *error) {
+	if err := body.Close(); err != nil {
+		*errp = errors.Join(*errp, fmt.Errorf("close ollama response body: %w", err))
+	}
 }

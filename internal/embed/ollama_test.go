@@ -3,11 +3,27 @@ package embed
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type closeErrorBody struct {
+	io.Reader
+	err error
+}
+
+func (body closeErrorBody) Close() error { return body.err }
 
 func TestOllamaEmbed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,5 +62,24 @@ func TestOllamaRejectsWrongDimension(t *testing.T) {
 	embedder := NewOllama(server.URL, "test", 3, time.Second)
 	if _, err := embedder.Embed(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("Embed() accepted a vector with the wrong dimension")
+	}
+}
+
+func TestOllamaReportsResponseCloseError(t *testing.T) {
+	closeErr := errors.New("close response")
+	embedder := NewOllama("http://ollama.invalid", "test", 3, time.Second)
+	embedder.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body: closeErrorBody{
+				Reader: strings.NewReader(`{"embeddings":[[1,2,3]]}`),
+				err:    closeErr,
+			},
+		}, nil
+	})
+
+	if _, err := embedder.Embed(context.Background(), []string{"x"}); !errors.Is(err, closeErr) {
+		t.Fatalf("Embed() error = %v, want response close error", err)
 	}
 }

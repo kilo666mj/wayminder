@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,14 +16,24 @@ func main() {
 	}
 
 	client := &http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
+	if err := check(client, url); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		fmt.Fprintln(os.Stderr, resp.Status)
-		os.Exit(1)
+}
+
+func check(client *http.Client, url string) (err error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
 	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close healthcheck response body: %w", closeErr))
+		}
+	}()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return errors.New(resp.Status)
+	}
+	return nil
 }
