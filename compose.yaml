@@ -59,7 +59,7 @@ services:
     ports:
       - "${WAYMINDER_BIND_ADDRESS:-127.0.0.1}:${WAYMINDER_PORT:-8080}:8080"
     volumes:
-      - ./secrets/clients.json:/run/secrets/wayminder-clients.json:ro
+      - ./secrets:/run/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy

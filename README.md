@@ -6,6 +6,10 @@ Wayminder is a self-hosted, local-first memory service for Codex, Claude Code, a
 other MCP clients. It stores durable agent knowledge in PostgreSQL/pgvector and
 uses a local Ollama embedding model for hybrid semantic and lexical recall.
 
+Wayminder remembers verified facts, decisions, preferences, procedures, and
+references that should survive an agent session. It is not a secret manager, a
+transient log store, or a replacement for source-controlled documentation.
+
 ## What is implemented
 
 - Streamable HTTP MCP with `remember`, `recall`, `list_memories`,
@@ -20,20 +24,33 @@ uses a local Ollama embedding model for hybrid semantic and lexical recall.
 
 See [DESIGN.md](DESIGN.md) for the design rationale and future work.
 
+## Place in the agent tooling stack
+
+Use Wayminder directly when a client only needs durable memory. Use
+[Switchboard](https://github.com/kilo666mj/switchboard) when the client benefits
+from one identity-aware endpoint that combines Wayminder with other tools. Use
+[Rendercase](https://github.com/kilo666mj/rendercase) for immutable, reviewable
+web artifacts; store only the durable conclusion or artifact reference in
+Wayminder, not the artifact bundle itself.
+
+When Switchboard fronts Wayminder, give the gateway its own registered
+Wayminder credential. Wayminder records that credential's client ID as the
+authoritative agent identity; scopes still organize recall and are not access-
+control boundaries.
+
 ## Run locally
 
 Requirements: Docker with Compose.
 
 ```sh
 cp .env.example .env
+mkdir -p secrets
 openssl rand -hex 32
 ```
 
-Put independently generated values into `POSTGRES_PASSWORD` and
-`WAYMINDER_DB_PASSWORD`. Production deployments use independent registered
-client credentials and a hash-only registry under `/opt/wayminder/secrets`.
-`WAYMINDER_AUTH_TOKEN` remains available only for migrations from older shared
-credentials. Then:
+Generate three independent values. Put two into `POSTGRES_PASSWORD` and
+`WAYMINDER_DB_PASSWORD`, and use the third as `WAYMINDER_AUTH_TOKEN` for this
+local-only quick start. Leave `WAYMINDER_CLIENTS_FILE` empty. Then:
 
 ```sh
 make up
@@ -42,23 +59,26 @@ curl http://127.0.0.1:8080/readyz
 
 The first start downloads `nomic-embed-text` (about 274 MB). PostgreSQL and
 Ollama are not published to the host. Set `WAYMINDER_PORT` if port 8080 is
-already occupied.
+already occupied. Before exposing Wayminder beyond a trusted development host,
+replace the shared token with independent registered clients as described in
+[Authentication and authorization](docs/authentication.md).
 
 ## Connect an MCP client
 
-Use `https://wayminder.example.com/mcp` as the Streamable HTTP endpoint and send:
+Use `https://wayminder.example.com/mcp` as the Streamable HTTP endpoint and send
+one bearer credential:
 
 ```text
 Authorization: Bearer <WAYMINDER_AUTH_TOKEN>
-X-Wayminder-Agent: codex
 X-Wayminder-Source: workstation
 ```
 
 Registered clients derive authoritative provenance from their bearer token;
-the agent header is used only by legacy clients. All registered agents share
-the same memory visibility and scope behavior. Keep tokens outside repository
-configuration. Exact client commands depend on the installed Codex/Claude
-versions.
+the source header is an optional provenance label, not an authorization input.
+All registered clients share the same memory visibility and scope behavior.
+Keep tokens outside repository configuration. See [MCP client
+integration](docs/mcp-clients.md) for a current Codex example, the tool contract,
+and Switchboard integration.
 
 ## Rotate or revoke a client
 
@@ -112,6 +132,18 @@ The playbook copies the checkout to `/opt/wayminder`, creates a mode-0600
 existing hash-only client registry, removes obsolete plaintext token files,
 restricts the backend port to loopback for the nginx reverse proxy, and starts
 the stack. It never replaces an existing `.env`.
+
+## Documentation
+
+- [Authentication and authorization](docs/authentication.md) — registered
+  clients, provenance, host controls, and rotation
+- [MCP client integration](docs/mcp-clients.md) — Codex configuration, generic
+  HTTP clients, tools, and Switchboard
+- [Operations and recovery](docs/operations.md) — health, upgrades, backups,
+  restores, and credential recovery
+- [Troubleshooting](docs/troubleshooting.md) — startup, readiness, recall, and
+  authentication failures
+- [Design rationale](DESIGN.md) — memory semantics and future work
 
 ## Scope behavior
 
