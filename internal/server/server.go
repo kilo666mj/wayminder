@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kilo666mj/mcpkit"
 	"github.com/kilo666mj/wayminder/internal/config"
 	"github.com/kilo666mj/wayminder/internal/memory"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.michaelspost.com/mcpkit"
 )
 
 const version = "0.1.0"
