@@ -4,11 +4,11 @@ go 1.27.1
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/kilo666mj/mcpkit v0.1.0
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
+	go.michaelspost.com/mcpkit v0.2.0
 )
 
 require (

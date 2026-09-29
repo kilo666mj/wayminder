@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kilo666mj/mcpkit/mcpkittest"
 	"github.com/kilo666mj/wayminder/internal/config"
 	"github.com/kilo666mj/wayminder/internal/memory"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.michaelspost.com/mcpkit/mcpkittest"
 )
 
 type mcpTestStore struct{}
