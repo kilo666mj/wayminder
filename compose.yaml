@@ -18,7 +18,7 @@ services:
     networks: [backend]
 
   ollama:
-    image: ollama/ollama:latest@sha256:b86366bb528bbf7f1424435d165028497a5b69bf6ddb4fa5a87102e2b79f44fb
+    image: ollama/ollama:latest@sha256:5d3a2f25f9825628daba94dc0b1d421c7d57d6c03ae5faa9ba050e058bab8241
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
@@ -30,7 +30,7 @@ services:
     networks: [backend, model_egress]
 
   ollama-init:
-    image: ollama/ollama:latest@sha256:b86366bb528bbf7f1424435d165028497a5b69bf6ddb4fa5a87102e2b79f44fb
+    image: ollama/ollama:latest@sha256:5d3a2f25f9825628daba94dc0b1d421c7d57d6c03ae5faa9ba050e058bab8241
     restart: "no"
     environment:
       OLLAMA_HOST: http://ollama:11434
