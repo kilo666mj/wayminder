@@ -5,7 +5,7 @@ go 1.27.1
 toolchain go1.27.4
 
 require (
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pgvector/pgvector-go v0.4.1
