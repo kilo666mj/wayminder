@@ -2,7 +2,7 @@ module github.com/kilo666mj/wayminder
 
 go 1.27.1
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/jackc/pgx/v5 v5.12.0
