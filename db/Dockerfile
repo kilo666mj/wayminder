@@ -1,3 +1,3 @@
-FROM pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+FROM pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
 
 COPY --chmod=0755 init/01-wayminder.sh /docker-entrypoint-initdb.d/01-wayminder.sh
