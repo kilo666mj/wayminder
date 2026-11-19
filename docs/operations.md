@@ -86,6 +86,66 @@ an older registry can re-enable a credential that had since been revoked;
 restoring a newer registry can invalidate clients that still hold older
 tokens. Rotate affected clients after recovery.
 
+## Maintenance report
+
+`wayminder maintain` reads the database and prints a JSON report of
+consolidation candidates. It changes nothing.
+
+```sh
+make maintain > maintain.json
+make maintain ARGS="-threshold 0.9 -min-revisions 4 -content" > maintain.json
+```
+
+The report contains:
+
+- `duplicate_clusters`: groups of live memories whose embeddings are at least
+  `-threshold` similar (default `0.85`) and that share a scope, or where one
+  side is in `global` or `personal`;
+- `supersede_chains`: live memories with at least `-min-revisions` earlier
+  versions (default `3`);
+- `embedding_model_mismatches`: live memory counts for any model other than
+  `WAYMINDER_EMBED_MODEL`.
+
+Resolve a finding with the MCP `supersede` or `forget` tool so that the change
+is audited. `pairs_truncated: true` means more pairs exist than `-max-pairs`;
+raise the threshold or the limit. The duplicate comparison is quadratic in the
+number of live memories, so run it off-peak on a large store.
+
+By default the report identifies memories only by ID, scope, kind, author, and
+creation time. `-content` adds summaries and content: treat that output like a
+database dump, and do not send it to container logs or a shared channel.
+
+## Recall evaluation
+
+`wayminder probe` samples live memories, asks a generative model for questions
+each one should answer, and measures whether recall returns the memory.
+
+The generative model is separate from the embedding model and is not pulled by
+the stack. Pull one into the Ollama service once, then name it:
+
+```sh
+docker compose exec ollama ollama pull <generative-model>
+make probe ARGS="-model <generative-model>" > probe.json
+```
+
+Set `WAYMINDER_PROBE_MODEL` in `.env` to avoid repeating the flag. To use a
+different Ollama host for generation, set `WAYMINDER_PROBE_OLLAMA_URL` or pass
+`-ollama-url`; memory content is sent to that host, so use only one you would
+trust with a database dump. Embeddings always use the stack's own Ollama.
+
+Useful flags: `-memories` (sample size, default `50`), `-questions` (per
+memory, default `3`), `-k` (recall limit, default `5`, the limit agents get
+when they pass none), `-scope` (one exact scope), `-seed` (the same seed
+samples the same memories), and `-timeout` (per memory, default `2m`).
+
+Read the report as a comparison, not an absolute score: generated questions
+are easier than real ones. Keep the seed and model fixed and compare `overall`
+before and after a ranking or content change. `weak` lists memories that at
+least one of their own questions failed to return, worst first; they are
+candidates for a clearer summary or a rewrite. `generation_failures` counts
+memories the model produced no usable questions for. `-content` adds summaries
+and the generated questions, with the same handling caution as above.
+
 ## Credential loss
 
 If one client loses its token, rotate that client and recreate the container.

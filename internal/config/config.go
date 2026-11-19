@@ -37,22 +37,18 @@ var (
 	validSHA256   = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
+// Load returns the configuration for the MCP server, including the
+// authentication and host controls it requires.
 func Load() (Config, error) {
-	cfg := Config{
-		ListenAddress:      env("WAYMINDER_LISTEN_ADDRESS", ":8080"),
-		DatabaseURL:        env("WAYMINDER_DATABASE_URL", "postgres://wayminder_app:wayminder@localhost:5432/wayminder?sslmode=disable"),
-		AuthToken:          strings.TrimSpace(os.Getenv("WAYMINDER_AUTH_TOKEN")),
-		AllowInsecure:      envBool("WAYMINDER_ALLOW_INSECURE", false),
-		AllowedHosts:       splitCSV(env("WAYMINDER_ALLOWED_HOSTS", "localhost,127.0.0.1")),
-		OllamaURL:          strings.TrimRight(env("WAYMINDER_OLLAMA_URL", "http://localhost:11434"), "/"),
-		EmbeddingModel:     env("WAYMINDER_EMBED_MODEL", "nomic-embed-text"),
-		EmbeddingDimension: envInt("WAYMINDER_EMBED_DIMENSION", 768),
-		DedupThreshold:     envFloat("WAYMINDER_DEDUP_THRESHOLD", 0.92),
-		RequestTimeout:     envDuration("WAYMINDER_REQUEST_TIMEOUT", 20*time.Second),
-		MaxMemoryBytes:     envInt("WAYMINDER_MAX_MEMORY_BYTES", 16*1024),
-		RateLimitPerMinute: envInt("WAYMINDER_RATE_LIMIT_PER_MINUTE", 120),
-		RateLimitBurst:     envInt("WAYMINDER_RATE_LIMIT_BURST", 30),
+	cfg, err := LoadOffline()
+	if err != nil {
+		return Config{}, err
 	}
+	cfg.AuthToken = strings.TrimSpace(os.Getenv("WAYMINDER_AUTH_TOKEN"))
+	cfg.AllowInsecure = envBool("WAYMINDER_ALLOW_INSECURE", false)
+	cfg.AllowedHosts = splitCSV(env("WAYMINDER_ALLOWED_HOSTS", "localhost,127.0.0.1"))
+	cfg.RateLimitPerMinute = envInt("WAYMINDER_RATE_LIMIT_PER_MINUTE", 120)
+	cfg.RateLimitBurst = envInt("WAYMINDER_RATE_LIMIT_BURST", 30)
 	clientsFile := strings.TrimSpace(os.Getenv("WAYMINDER_CLIENTS_FILE"))
 	if clientsFile != "" {
 		clients, err := loadAuthClients(clientsFile)
@@ -67,15 +63,6 @@ func Load() (Config, error) {
 	if len(cfg.AuthToken) > 0 && len(cfg.AuthToken) < 32 {
 		return Config{}, fmt.Errorf("WAYMINDER_AUTH_TOKEN must be at least 32 characters")
 	}
-	if cfg.EmbeddingDimension <= 0 {
-		return Config{}, fmt.Errorf("WAYMINDER_EMBED_DIMENSION must be positive")
-	}
-	if cfg.DedupThreshold <= 0 || cfg.DedupThreshold > 1 {
-		return Config{}, fmt.Errorf("WAYMINDER_DEDUP_THRESHOLD must be in (0, 1]")
-	}
-	if cfg.MaxMemoryBytes < 256 {
-		return Config{}, fmt.Errorf("WAYMINDER_MAX_MEMORY_BYTES must be at least 256")
-	}
 	if cfg.RateLimitPerMinute <= 0 || cfg.RateLimitBurst <= 0 {
 		return Config{}, fmt.Errorf("WAYMINDER_RATE_LIMIT_PER_MINUTE and WAYMINDER_RATE_LIMIT_BURST must be positive")
 	}
@@ -86,6 +73,32 @@ func Load() (Config, error) {
 		if host == "*" && !cfg.AllowInsecure {
 			return Config{}, fmt.Errorf("WAYMINDER_ALLOWED_HOSTS may contain * only when WAYMINDER_ALLOW_INSECURE=true")
 		}
+	}
+	return cfg, nil
+}
+
+// LoadOffline returns the storage and embedding configuration shared by the
+// server and the offline commands. Offline commands serve no clients, so they
+// neither read nor require client credentials.
+func LoadOffline() (Config, error) {
+	cfg := Config{
+		ListenAddress:      env("WAYMINDER_LISTEN_ADDRESS", ":8080"),
+		DatabaseURL:        env("WAYMINDER_DATABASE_URL", "postgres://wayminder_app:wayminder@localhost:5432/wayminder?sslmode=disable"),
+		OllamaURL:          strings.TrimRight(env("WAYMINDER_OLLAMA_URL", "http://localhost:11434"), "/"),
+		EmbeddingModel:     env("WAYMINDER_EMBED_MODEL", "nomic-embed-text"),
+		EmbeddingDimension: envInt("WAYMINDER_EMBED_DIMENSION", 768),
+		DedupThreshold:     envFloat("WAYMINDER_DEDUP_THRESHOLD", 0.92),
+		RequestTimeout:     envDuration("WAYMINDER_REQUEST_TIMEOUT", 20*time.Second),
+		MaxMemoryBytes:     envInt("WAYMINDER_MAX_MEMORY_BYTES", 16*1024),
+	}
+	if cfg.EmbeddingDimension <= 0 {
+		return Config{}, fmt.Errorf("WAYMINDER_EMBED_DIMENSION must be positive")
+	}
+	if cfg.DedupThreshold <= 0 || cfg.DedupThreshold > 1 {
+		return Config{}, fmt.Errorf("WAYMINDER_DEDUP_THRESHOLD must be in (0, 1]")
+	}
+	if cfg.MaxMemoryBytes < 256 {
+		return Config{}, fmt.Errorf("WAYMINDER_MAX_MEMORY_BYTES must be at least 256")
 	}
 	return cfg, nil
 }
