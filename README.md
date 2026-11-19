@@ -20,7 +20,9 @@ transient log store, or a replacement for source-controlled documentation.
 - semantic deduplication and PostgreSQL full-text/vector rank fusion;
 - per-client bearer authentication and rate limits, host allowlisting, body
   limits, and likely-secret rejection across all stored user-controlled fields;
-- a Compose stack with isolated PostgreSQL, pgvector, Ollama, and health checks.
+- a Compose stack with isolated PostgreSQL, pgvector, Ollama, and health checks;
+- offline `wayminder maintain` and `wayminder probe` reports for consolidation
+  candidates and measured recall quality.
 
 See [DESIGN.md](DESIGN.md) for the design rationale and future work.
 
@@ -118,7 +120,8 @@ make config
 ```
 
 The unit suite does not need Docker. `make up` exercises the real Ollama and
-pgvector path.
+pgvector path. Set `WAYMINDER_TEST_DATABASE_URL` to a disposable pgvector
+database to also run the store integration tests; they are skipped otherwise.
 
 ## Deploy
 
@@ -140,7 +143,7 @@ the stack. It never replaces an existing `.env`.
 - [MCP client integration](docs/mcp-clients.md) — Codex configuration, generic
   HTTP clients, tools, and Switchboard
 - [Operations and recovery](docs/operations.md) — health, upgrades, backups,
-  restores, and credential recovery
+  restores, maintenance reports, recall evaluation, and credential recovery
 - [Troubleshooting](docs/troubleshooting.md) — startup, readiness, recall, and
   authentication failures
 - [Design rationale](DESIGN.md) — memory semantics and future work

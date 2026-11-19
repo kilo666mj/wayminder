@@ -285,17 +285,51 @@ activity summary—not complete memory content. Repository-level `AGENTS.md` and
 
 ### Maintenance
 
-A scheduled deterministic maintenance command will:
+`wayminder maintain` is a deterministic, read-only command for a scheduled or
+manual consolidation pass. It reports:
 
-- identify probable duplicates;
-- report contradictory or repeatedly superseded memories;
-- prune expired recall traces;
-- hard-delete soft-deleted rows after the configured retention period;
-- report embedding-model mismatches;
-- optionally re-embed records during a controlled model migration.
+- probable duplicates: live memories whose embeddings meet a similarity
+  threshold (default 0.85, below the write-time deduplication threshold) and
+  that one recall can return together, meaning the same scope or either side in
+  `global` or `personal`. Pairs are grouped into connected clusters;
+- repeatedly superseded memories: live memories with at least a configured
+  number of earlier versions (default 3), which usually marks a volatile fact
+  or task status stored as durable knowledge;
+- embedding-model mismatches against the configured model.
+
+The duplicate comparison is exact and quadratic in the number of live
+memories. That is acceptable offline at the intended scale and is the reason it
+is not an MCP tool.
+
+The command never mutates memories. Acting on a finding is an ordinary
+`supersede` or `forget` through MCP, so every change stays audited. Still
+planned: contradiction reporting, pruning expired recall traces, hard-deleting
+soft-deleted rows after a retention period, and re-embedding during a
+controlled model migration.
 
 Automated semantic rewriting is deferred. A future agent-assisted maintenance
 mode may propose changes, but every mutation must remain auditable.
+
+### Recall evaluation
+
+`wayminder probe` measures whether memories can be found. For a seeded sample
+of live memories, a local generative model writes a few questions each memory
+should answer. Every question runs through the ordinary recall path in the
+memory's own scope, and the memory's rank is recorded. The report gives hit@1,
+hit@k, and mean reciprocal rank overall and by scope, and lists memories that
+at least one of their own questions failed to return.
+
+This gives ranking changes (open decision 2) a number to move, and it points
+at memories worth rewriting or summarizing. Its limits are deliberate:
+
+- the generative model runs only in this offline command, never in the request
+  path, and on an operator-chosen Ollama endpoint. Memory content is sent to
+  that endpoint, so it must be one the operator trusts with it;
+- generated questions are easier than real agent queries because the model has
+  read the answer, so the scores are an upper bound and are useful mainly for
+  comparing runs with the same seed and model;
+- a memory in `global` or `personal` is probed without a repository scope and
+  therefore faces less competition than it does in real use.
 
 ## 13. Observability
 
@@ -380,7 +414,8 @@ database access.
 ## 16. Open decisions
 
 1. Direct ONNX inference versus an Ollama embedding endpoint after benchmarking.
-2. Exact hybrid-ranking formula and score presentation.
+2. Exact hybrid-ranking formula and score presentation. `wayminder probe`
+   provides the measurement for comparing candidates.
 3. Retention duration for soft-deleted memories and recall traces.
 4. Whether explicit memory links belong in the first database migration or a
    later migration.

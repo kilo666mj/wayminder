@@ -82,3 +82,20 @@ func TestLoadRejectsWildcardHostInSecureMode(t *testing.T) {
 		t.Fatal("Load() accepted wildcard host in secure mode")
 	}
 }
+
+func TestLoadOfflineNeedsNoClientCredentials(t *testing.T) {
+	t.Setenv("WAYMINDER_AUTH_TOKEN", "")
+	t.Setenv("WAYMINDER_CLIENTS_FILE", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("WAYMINDER_ALLOW_INSECURE", "false")
+	cfg, err := LoadOffline()
+	if err != nil {
+		t.Fatalf("LoadOffline() error = %v", err)
+	}
+	if cfg.EmbeddingModel != "nomic-embed-text" || cfg.EmbeddingDimension != 768 || len(cfg.AuthClients) != 0 {
+		t.Fatalf("unexpected offline config: %#v", cfg)
+	}
+	t.Setenv("WAYMINDER_EMBED_DIMENSION", "0")
+	if _, err := LoadOffline(); err == nil {
+		t.Fatal("LoadOffline() accepted a zero embedding dimension")
+	}
+}

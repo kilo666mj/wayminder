@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +19,22 @@ import (
 )
 
 func main() {
+	command := "serve"
+	if len(os.Args) > 1 {
+		command = os.Args[1]
+	}
+	switch command {
+	case "serve":
+		serve()
+	case "maintain", "probe":
+		os.Exit(runOffline(command, os.Args[2:]))
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q; expected serve, maintain, or probe\n", command)
+		os.Exit(2)
+	}
+}
+
+func serve() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg, err := config.Load()
 	if err != nil {
